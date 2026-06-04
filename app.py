@@ -139,6 +139,7 @@
 #     st.info("Upload an image above to get started.")
 
 
+
 """
 DeepFake Detector — Streamlit App
 Supports: Images (JPG/PNG/WEBP) + Videos (MP4/MOV/AVI)
@@ -612,13 +613,17 @@ def render_frame_grid(frame_results: list, max_show: int = 24):
     for i, r in enumerate(subset):
         col = cols[i % len(cols)]
         with col:
-            lbl_cls = "label-real" if r['label'] == "Real" else "label-fake"
+            # Extract expressions to variables — backslashes not allowed
+            # inside f-string {} in Python < 3.12
+            frame_color = "#00c97a" if r['label'] == "Real" else "#ff3b6b"
+            frame_label = r['label']
+            frame_conf  = f"{r['confidence']:.0f}%"
+            frame_ts    = f"{r['timestamp']:.1f}s"
             st.image(r['frame'], use_column_width=True)
             st.markdown(
                 f"<div style='text-align:center;font-size:10px;"
-                f"font-family:var(--mono);color:"
-                f"{'#00c97a' if r['label']==\"Real\" else '#ff3b6b'}'>"
-                f"{r['label']} {r['confidence']:.0f}%&nbsp;|&nbsp;{r['timestamp']:.1f}s"
+                f"font-family:var(--mono);color:{frame_color}'>"
+                f"{frame_label} {frame_conf}&nbsp;|&nbsp;{frame_ts}"
                 f"</div>",
                 unsafe_allow_html=True
             )
