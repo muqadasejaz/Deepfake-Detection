@@ -393,35 +393,85 @@ class XceptionDeepFakeDetector(nn.Module):
 # WEIGHT DOWNLOAD
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _safe_load(path, device):
-    """PyTorch 2.6-compatible torch.load."""
+def _detect_file_format(path: str) -> str:
+    """
+    Detect whether a weights file is HDF5 (.h5) or PyTorch pickle (.pt/.pth).
+    Reads the first 8 bytes — HDF5 magic is b'\\x89HDF\\r\\n\\x1a\\n'.
+    PyTorch zip-based files start with b'PK'.
+    Returns 'h5', 'pt', or 'unknown'.
+    """
     try:
-        return torch.load(path, map_location=device, weights_only=True)
+        with open(path, 'rb') as f:
+            magic = f.read(8)
+        if magic[:4] == b'\x89HDF':
+            return 'h5'
+        if magic[:2] == b'PK':       # zip/torch.save format
+            return 'pt'
+        if magic[:2] == b'\x80\x02': # legacy pickle
+            return 'pt'
     except Exception:
-        return torch.load(path, map_location=device, weights_only=False)
+        pass
+    return 'unknown'
+
+
+def _load_from_h5(path: str, device):
+    """
+    Extract the PyTorch state dict stored inside an HDF5 file
+    written by the Kaggle training notebook (dataset key: 'model_weights').
+    """
+    import h5py, io
+    with h5py.File(path, 'r') as hf:
+        raw = bytes(hf['model_weights'][:].tobytes())
+    buf = io.BytesIO(raw)
+    try:
+        state = torch.load(buf, map_location=device, weights_only=True)
+    except Exception:
+        buf.seek(0)
+        state = torch.load(buf, map_location=device, weights_only=False)
+    return state
+
+
+def _safe_load(path: str, device):
+    """
+    Auto-detect file format and load state dict correctly.
+    Handles:
+      - HDF5  (.h5)  — saved by Kaggle notebook via h5py
+      - PyTorch zip  (.pt / .pth) — saved by torch.save()
+    Returns a state dict or checkpoint dict.
+    """
+    fmt = _detect_file_format(path)
+    if fmt == 'h5':
+        return _load_from_h5(path, device)   # returns state dict directly
+    else:
+        try:
+            return torch.load(path, map_location=device, weights_only=True)
+        except Exception:
+            return torch.load(path, map_location=device, weights_only=False)
 
 
 def download_weights():
-    """Download from Google Drive using secrets. Supports both model keys."""
-    secrets = st.secrets.get("gdrive", {})
+    """Download from Google Drive using secrets. Single key supported."""
+    secrets  = st.secrets.get("gdrive", {})
+    local_path = XCEPTION_PATH   # default download target
 
-    # ── ViT weights ───────────────────────────────────────────────────────────
-    if not os.path.exists(WEIGHTS_PATH):
-        fid = secrets.get("deepfake_vit") or secrets.get("deepfake_image")
-        if fid:
-            with st.spinner("⬇️  Downloading ViT model weights…"):
-                gdown.download(f"https://drive.google.com/uc?id={fid}",
-                               WEIGHTS_PATH, quiet=False)
-        else:
-            st.warning("No `gdrive.deepfake_vit` key found in secrets.")
+    # Use deepfake_vit if present, else fall back to deepfake_image
+    fid = secrets.get("deepfake_vit") or secrets.get("deepfake_image")
 
-    # ── XceptionNet weights (fallback / alternative) ──────────────────────────
-    if not os.path.exists(XCEPTION_PATH):
-        fid = secrets.get("deepfake_image")
-        if fid and fid != secrets.get("deepfake_vit"):
-            with st.spinner("⬇️  Downloading XceptionNet weights…"):
-                gdown.download(f"https://drive.google.com/uc?id={fid}",
-                               XCEPTION_PATH, quiet=False)
+    if not fid:
+        st.error("No Google Drive file ID found in secrets.\n"
+                 "Add `deepfake_image` or `deepfake_vit` under `[gdrive]`.")
+        st.stop()
+
+    if not os.path.exists(local_path):
+        with st.spinner("⬇️  Downloading model weights… (first run only)"):
+            gdown.download(
+                f"https://drive.google.com/uc?id={fid}",
+                local_path, quiet=False
+            )
+        if not os.path.exists(local_path):
+            st.error("Download failed. Make sure the Drive file is set to "
+                     "'Anyone with the link can view'.")
+            st.stop()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -432,23 +482,44 @@ def download_weights():
 def load_model(arch: str):
     download_weights()
 
-    if arch == "vit" and os.path.exists(WEIGHTS_PATH):
+    # ── Determine which local file to use ─────────────────────────────────────
+    weights_file = XCEPTION_PATH   # download_weights() always saves here
+
+    # ── Detect format BEFORE choosing model class ─────────────────────────────
+    fmt = _detect_file_format(weights_file)
+
+    # ── Load raw state dict ───────────────────────────────────────────────────
+    raw = _safe_load(weights_file, DEVICE)
+
+    # raw may be: state_dict directly, or a checkpoint dict containing one
+    if isinstance(raw, dict):
+        state = raw.get('model_state_dict',
+                raw.get('state_dict', raw))
+    else:
+        state = raw
+
+    # ── Pick architecture ─────────────────────────────────────────────────────
+    # Auto-detect from state dict key names if possible
+    key_sample = next(iter(state.keys()), "")
+    if 'backbone' in key_sample or 'head' in key_sample:
+        detected_arch = 'vit'
+    elif 'model.conv1' in key_sample or 'model.bn1' in key_sample:
+        detected_arch = 'xception'
+    else:
+        detected_arch = arch   # trust user setting
+
+    if detected_arch == 'vit':
         model = ViTDeepFakeDetector()
-        ckpt  = _safe_load(WEIGHTS_PATH, DEVICE)
-        state = ckpt.get('model_state_dict', ckpt.get('state_dict', ckpt)) \
-                if isinstance(ckpt, dict) else ckpt
-        model.load_state_dict(state, strict=False)
     else:
         model = XceptionDeepFakeDetector()
-        if os.path.exists(XCEPTION_PATH):
-            ckpt  = _safe_load(XCEPTION_PATH, DEVICE)
-            state = ckpt.get('model_state_dict', ckpt.get('state_dict', ckpt)) \
-                    if isinstance(ckpt, dict) else ckpt
-            model.load_state_dict(state, strict=False)
+
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if unexpected:
+        pass   # silently ignore extra keys (e.g. from different head versions)
 
     model.to(DEVICE)
     model.eval()
-    return model
+    return model, detected_arch
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -665,8 +736,8 @@ with st.sidebar:
 
 # ── Load model ────────────────────────────────────────────────────────────────
 try:
-    model     = load_model(arch)
-    transform = get_transform(arch)
+    model, detected_arch = load_model(arch)
+    transform = get_transform(detected_arch)   # use auto-detected arch for correct input size
 except Exception as e:
     st.error(f"❌ Failed to load model: {e}")
     st.stop()
