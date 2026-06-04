@@ -143,7 +143,7 @@
 """
 DeepFake Detector — Streamlit App
 Model: ViT-B/16
-Supports: Images (JPG/PNG/WEBP) + Videos (MP4/MOV/AVI)
+Supports: Single Image (JPG/PNG/WEBP) + Videos (MP4/MOV/AVI)
 """
 
 import os, io, time, tempfile, math
@@ -206,9 +206,6 @@ html, body, [class*="css"] {
 
 /* ── Header ── */
 .df-header {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
     padding-bottom: 1.5rem;
     border-bottom: 1px solid var(--border);
     margin-bottom: 2.5rem;
@@ -220,14 +217,12 @@ html, body, [class*="css"] {
     line-height: 1;
 }
 .df-title span { color: var(--accent); }
-.df-badge {
+.df-sub {
     font-family: var(--mono);
-    font-size: 0.7rem;
+    font-size: 0.72rem;
     color: var(--muted);
-    border: 1px solid var(--border);
-    padding: 4px 12px;
-    border-radius: 4px;
-    letter-spacing: 0.08em;
+    margin-top: 6px;
+    letter-spacing: 0.04em;
 }
 
 /* ── Upload zone ── */
@@ -482,7 +477,7 @@ def download_weights():
 
 
 @st.cache_resource(show_spinner="Loading ViT-B/16 weights…")
-def load_model():
+def load_model_v2():
     download_weights()
     raw = _safe_load(WEIGHTS_PATH, DEVICE)
     if isinstance(raw, dict):
@@ -577,12 +572,11 @@ def analyse_video(model, video_path: str) -> dict:
 def render_verdict(label: str, confidence: float, p_real: float, p_fake: float):
     css  = "verdict-real" if label == "Real" else "verdict-fake"
     vcss = "vdict-real"   if label == "Real" else "vdict-fake"
-    icon = "✓" if label == "Real" else "✗"
     st.markdown(f"""
     <div class="verdict-wrap {css}">
         <div class="{vcss}">
             <div class="vdict-tag">VERDICT</div>
-            <div class="vdict-label">{icon}&ensp;{label.upper()}</div>
+            <div class="vdict-label">{label.upper()}</div>
             <div class="vdict-conf">Confidence: {confidence:.1f}%</div>
         </div>
         <div class="bar-section">
@@ -605,12 +599,11 @@ def render_video_verdict(result: dict):
     v    = result['verdict']
     css  = "verdict-real" if v == "Real" else "verdict-fake"
     vcss = "vdict-real"   if v == "Real" else "vdict-fake"
-    icon = "✓" if v == "Real" else "✗"
     st.markdown(f"""
     <div class="verdict-wrap {css}">
         <div class="{vcss}">
             <div class="vdict-tag">VERDICT</div>
-            <div class="vdict-label">{icon}&ensp;{v.upper()}</div>
+            <div class="vdict-label">{v.upper()}</div>
             <div class="vdict-conf">
                 {result['fake_frames']} / {result['total_frames']} frames flagged fake
                 &nbsp;·&nbsp; Avg P(Fake): {result['avg_p_fake']:.1f}%
@@ -653,7 +646,7 @@ def render_frame_grid(frame_results: list, max_show: int = 24):
 # LOAD MODEL
 # ══════════════════════════════════════════════════════════════════════════════
 try:
-    model = load_model()
+    model = load_model_v2()
 except Exception as e:
     st.error(f"Failed to load model: {e}")
     st.stop()
@@ -665,7 +658,7 @@ except Exception as e:
 st.markdown("""
 <div class="df-header">
     <div class="df-title">Deep<span>Fake</span> Detector</div>
-    <div class="df-badge">ViT-B/16 · RESEARCH ONLY</div>
+    <div class="df-sub">Powered by Vision Transformer · Image & Video Analysis</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -680,47 +673,45 @@ tab_img, tab_vid = st.tabs(["🖼️  Image Analysis", "🎬  Video Analysis"])
 with tab_img:
     st.markdown(
         "<p style='color:var(--muted);font-size:0.85rem;margin-bottom:1.2rem'>"
-        "Upload one or more images to check if they are authentic or AI-generated."
+        "Upload an image to check if it is authentic or AI-generated / deepfake."
         "</p>",
         unsafe_allow_html=True,
     )
 
-    uploaded_imgs = st.file_uploader(
-        "Images",
+    uploaded_img = st.file_uploader(
+        "Image",
         type=["jpg", "jpeg", "png", "webp", "bmp"],
-        accept_multiple_files=True,
+        accept_multiple_files=False,
         key="img_uploader",
         label_visibility="collapsed",
     )
 
-    if uploaded_imgs:
-        if st.button("ANALYZE IMAGES", key="img_btn"):
-            for uploaded in uploaded_imgs:
-                st.markdown("---")
-                pil_img = Image.open(uploaded).convert("RGB")
-                col_img, col_res = st.columns([1, 1], gap="large")
+    if uploaded_img:
+        if st.button("ANALYZE IMAGE", key="img_btn"):
+            pil_img = Image.open(uploaded_img).convert("RGB")
+            col_img, col_res = st.columns([1, 1], gap="large")
 
-                with col_img:
-                    st.image(pil_img, use_column_width=True, caption=uploaded.name)
-                    w, h = pil_img.size
-                    st.markdown(
-                        f"<div class='img-meta'>{w}×{h}px · {uploaded.size / 1024:.0f} KB</div>",
-                        unsafe_allow_html=True,
-                    )
+            with col_img:
+                st.image(pil_img, use_column_width=True, caption=uploaded_img.name)
+                w, h = pil_img.size
+                st.markdown(
+                    f"<div class='img-meta'>{w}×{h}px · {uploaded_img.size / 1024:.0f} KB</div>",
+                    unsafe_allow_html=True,
+                )
 
-                with col_res:
-                    with st.spinner("Running inference…"):
-                        t0  = time.time()
-                        res = predict(model, pil_img)
-                        ms  = (time.time() - t0) * 1000
-                    render_verdict(res['label'], res['confidence'], res['p_real'], res['p_fake'])
-                    st.markdown(
-                        f"<div style='font-family:var(--mono);font-size:0.7rem;"
-                        f"color:var(--muted);margin-top:8px'>Inference: {ms:.0f} ms</div>",
-                        unsafe_allow_html=True,
-                    )
+            with col_res:
+                with st.spinner("Running inference…"):
+                    t0  = time.time()
+                    res = predict(model, pil_img)
+                    ms  = (time.time() - t0) * 1000
+                render_verdict(res['label'], res['confidence'], res['p_real'], res['p_fake'])
+                st.markdown(
+                    f"<div style='font-family:var(--mono);font-size:0.7rem;"
+                    f"color:var(--muted);margin-top:8px'>Inference: {ms:.0f} ms</div>",
+                    unsafe_allow_html=True,
+                )
     else:
-        st.info("Drop one or more images above to get started.")
+        st.info("Drop an image above to get started.")
 
 
 # ── VIDEO TAB ─────────────────────────────────────────────────────────────────
@@ -782,4 +773,3 @@ with tab_vid:
                 os.unlink(tmp_path)
     else:
         st.info("Drop a video above to get started.")
-
