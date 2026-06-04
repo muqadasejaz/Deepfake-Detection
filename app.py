@@ -783,11 +783,3 @@ with tab_vid:
     else:
         st.info("Drop a video above to get started.")
 
-
-# ── FOOTER ────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div style="margin-top:4rem;padding-top:1rem;border-top:1px solid var(--border);
-     text-align:center;font-size:0.7rem;color:var(--muted);font-family:var(--mono)">
-    DeepFake Detector · ViT-B/16 · For research purposes only
-</div>
-""", unsafe_allow_html=True)
