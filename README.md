@@ -1,3 +1,3 @@
 # Deepfake-Detection
 
-Image and Video Detection system 
+Image and Video Deepfake detection system
